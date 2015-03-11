@@ -1,7 +1,7 @@
 /*!
  * typeahead.js 0.10.5
  * https://github.com/twitter/typeahead.js
- * Copyright 2013-2014 Twitter, Inc. and other contributors; Licensed MIT
+ * Copyright 2013-2015 Twitter, Inc. and other contributors; Licensed MIT
  */
 
 (function($) {
@@ -122,6 +122,13 @@
                     }
                     return result;
                 };
+            },
+            guid: function() {
+                function _p8(s) {
+                    var p = (Math.random().toString(16) + "000000000").substr(2, 8);
+                    return s ? "-" + p.substr(0, 4) + "-" + p.substr(4, 4) : p;
+                }
+                return "tt-" + _p8() + _p8(true) + _p8(true) + _p8();
             },
             noop: function() {}
         };

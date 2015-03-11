@@ -1,7 +1,7 @@
 /*!
  * typeahead.js 0.10.5
  * https://github.com/twitter/typeahead.js
- * Copyright 2013-2014 Twitter, Inc. and other contributors; Licensed MIT
+ * Copyright 2013-2015 Twitter, Inc. and other contributors; Licensed MIT
  */
 
 (function($) {
@@ -123,16 +123,24 @@
                     return result;
                 };
             },
+            guid: function() {
+                function _p8(s) {
+                    var p = (Math.random().toString(16) + "000000000").substr(2, 8);
+                    return s ? "-" + p.substr(0, 4) + "-" + p.substr(4, 4) : p;
+                }
+                return "tt-" + _p8() + _p8(true) + _p8(true) + _p8();
+            },
             noop: function() {}
         };
     }();
     var html = function() {
         return {
             wrapper: '<span class="twitter-typeahead"></span>',
-            dropdown: '<span class="tt-dropdown-menu"></span>',
-            dataset: '<div class="tt-dataset-%CLASS%"></div>',
-            suggestions: '<span class="tt-suggestions"></span>',
-            suggestion: '<div class="tt-suggestion"></div>'
+            dropdown: '<span class="tt-dropdown-menu" role="listbox"></span>',
+            dataset: '<div class="tt-dataset-%CLASS%" role="presentation"></div>',
+            suggestions: '<span class="tt-suggestions" role="presentation"></span>',
+            suggestion: '<div class="tt-suggestion" role="option"></div>',
+            status: '<span class="tt-status" role="status" aria-live="polite"></span>'
         };
     }();
     var css = function() {
@@ -183,6 +191,16 @@
             rtl: {
                 left: "auto",
                 right: " 0"
+            },
+            status: {
+                border: "0 none",
+                clip: "rect(0, 0, 0, 0)",
+                height: "1px",
+                width: "1px",
+                margin: "-1px",
+                overflow: "hidden",
+                padding: "0",
+                position: "absolute"
             }
         };
         if (_.isMsie()) {
@@ -482,6 +500,9 @@
             resetInputValue: function resetInputValue() {
                 this.setInputValue(this.query, true);
             },
+            isWithHint: function() {
+                return this.$hint.length !== 0;
+            },
             getHint: function getHint() {
                 return this.$hint.val();
             },
@@ -524,6 +545,19 @@
                 this.$hint.off(".tt");
                 this.$input.off(".tt");
                 this.$hint = this.$input = this.$overflowHelper = null;
+            },
+            destroyDomStructure: function($node, attrsKey) {
+                var $input = this.$input;
+                _.each($input.data(attrsKey), function(val, key) {
+                    _.isUndefined(val) ? $input.removeAttr(key) : $input.attr(key, val);
+                });
+                $input.detach().removeData(attrsKey).removeClass("tt-input").insertAfter($node);
+            },
+            attr: function(key, value) {
+                this.$input.attr(key, value);
+            },
+            removeAttr: function(key) {
+                this.$input.removeAttr(key);
             }
         });
         return Input;
@@ -601,8 +635,9 @@
                     });
                 }
                 function getSuggestionsHtml() {
-                    var $suggestions, nodes;
+                    var $suggestions, nodes, dropdownId;
                     $suggestions = $(html.suggestions).css(css.suggestions);
+                    dropdownId = that.$el.parent().attr("id") + "-";
                     nodes = _.map(suggestions, getSuggestionNode);
                     $suggestions.append.apply($suggestions, nodes);
                     that.highlight && highlight({
@@ -611,9 +646,9 @@
                         pattern: query
                     });
                     return $suggestions;
-                    function getSuggestionNode(suggestion) {
+                    function getSuggestionNode(suggestion, i) {
                         var $el;
-                        $el = $(html.suggestion).append(that.templates.suggestion(suggestion)).data(datasetKey, that.name).data(valueKey, that.displayFn(suggestion)).data(datumKey, suggestion);
+                        $el = $(html.suggestion).append(that.templates.suggestion(suggestion)).data(datasetKey, that.name).data(valueKey, that.displayFn(suggestion)).data(datumKey, suggestion).attr("id", dropdownId + i);
                         $el.children().each(function() {
                             $(this).css(css.suggestionChild);
                         });
@@ -804,7 +839,8 @@
                     datum = {
                         raw: Dataset.extractDatum($el),
                         value: Dataset.extractValue($el),
-                        datasetName: Dataset.extractDatasetName($el)
+                        datasetName: Dataset.extractDatasetName($el),
+                        id: $el.attr("id")
                     };
                 }
                 return datum;
@@ -838,6 +874,9 @@
                 function destroyDataset(dataset) {
                     dataset.destroy();
                 }
+            },
+            countSuggestions: function() {
+                return this.$menu.find(".tt-suggestion").length;
             }
         });
         return Dropdown;
@@ -857,10 +896,12 @@
             this.isActivated = false;
             this.autoselect = !!o.autoselect;
             this.minLength = _.isNumber(o.minLength) ? o.minLength : 1;
-            this.$node = buildDom(o.input, o.withHint);
+            this.accessibleStatus = _.isUndefined(o.accessibleStatus) || o.accessibleStatus == null ? null : _.templatify(o.accessibleStatus);
+            this.$node = buildDom(o.input, o.withHint, this.accessibleStatus != null);
             $menu = this.$node.find(".tt-dropdown-menu");
             $input = this.$node.find(".tt-input");
             $hint = this.$node.find(".tt-hint");
+            this.$status = this.accessibleStatus != null ? this.$node.find(".tt-status") : null;
             $input.on("blur.tt", function($e) {
                 var active, isActive, hasActive;
                 active = document.activeElement;
@@ -900,14 +941,31 @@
             _onCursorMoved: function onCursorMoved() {
                 var datum = this.dropdown.getDatumForCursor();
                 this.input.setInputValue(datum.value, true);
+                this.input.attr("aria-activedescendant", datum.id);
                 this.eventBus.trigger("cursorchanged", datum.raw, datum.datasetName);
             },
             _onCursorRemoved: function onCursorRemoved() {
                 this.input.resetInputValue();
                 this._updateHint();
+                this.input.removeAttr("aria-activedescendant");
             },
             _onDatasetRendered: function onDatasetRendered() {
                 this._updateHint();
+                if (this.dropdown.isVisible()) {
+                    this.input.attr("aria-expanded", "true");
+                } else {
+                    this.input.attr("aria-expanded", "false");
+                    this.input.removeAttr("aria-activedescendant");
+                }
+                if (this.$status) {
+                    this.$status.html(this.accessibleStatus({
+                        query: this.getVal(),
+                        hint: this.input.isWithHint() ? this.input.getHint() : null,
+                        count: this.dropdown.countSuggestions(),
+                        isEmpty: this.dropdown.isEmpty,
+                        withHint: this.input.isWithHint()
+                    }));
+                }
             },
             _onOpened: function onOpened() {
                 this._updateHint();
@@ -915,6 +973,8 @@
             },
             _onClosed: function onClosed() {
                 this.input.clearHint();
+                this.input.removeAttr("aria-activedescendant");
+                this.input.attr("aria-expanded", "false");
                 this.eventBus.trigger("closed");
             },
             _onFocused: function onFocused() {
@@ -1040,22 +1100,33 @@
             destroy: function destroy() {
                 this.input.destroy();
                 this.dropdown.destroy();
-                destroyDomStructure(this.$node);
+                this.input.destroyDomStructure(this.$node, attrsKey);
+                this.$node.remove();
                 this.$node = null;
             }
         });
         return Typeahead;
-        function buildDom(input, withHint) {
-            var $input, $wrapper, $dropdown, $hint;
+        function buildDom(input, withHint, withStatus) {
+            var $input, $wrapper, $dropdown, $hint, $status;
             $input = $(input);
             $wrapper = $(html.wrapper).css(css.wrapper);
             $dropdown = $(html.dropdown).css(css.dropdown);
-            $hint = $input.clone().css(css.hint).css(getBackgroundStyles($input));
-            $hint.val("").removeData().addClass("tt-hint").removeAttr("id name placeholder required").prop("readonly", true).attr({
-                autocomplete: "off",
-                spellcheck: "false",
-                tabindex: -1
+            var guid = _.guid();
+            $dropdown.attr("id", guid);
+            $input.attr({
+                "aria-owns": guid,
+                "aria-expanded": "false"
             });
+            $hint = withHint ? $input.clone().css(css.hint).css(getBackgroundStyles($input)) : null;
+            $status = withStatus ? $(html.status).css(css.status) : null;
+            if ($hint) {
+                $hint.val("").removeData().addClass("tt-hint").removeAttr("id name placeholder required aria-owns aria-expanded").prop("readonly", true).attr({
+                    autocomplete: "off",
+                    spellcheck: "false",
+                    tabindex: -1,
+                    "aria-hidden": "true"
+                });
+            }
             $input.data(attrsKey, {
                 dir: $input.attr("dir"),
                 autocomplete: $input.attr("autocomplete"),
@@ -1064,12 +1135,14 @@
             });
             $input.addClass("tt-input").attr({
                 autocomplete: "off",
-                spellcheck: false
+                spellcheck: false,
+                role: "combobox",
+                "aria-autocomplete": withHint ? "both" : "list"
             }).css(withHint ? css.input : css.inputWithNoHint);
             try {
                 !$input.attr("dir") && $input.attr("dir", "auto");
             } catch (e) {}
-            return $input.wrap($wrapper).parent().prepend(withHint ? $hint : null).append($dropdown);
+            return $input.wrap($wrapper).parent().prepend($hint).append($dropdown).append($status);
         }
         function getBackgroundStyles($el) {
             return {
@@ -1082,14 +1155,6 @@
                 backgroundRepeat: $el.css("background-repeat"),
                 backgroundSize: $el.css("background-size")
             };
-        }
-        function destroyDomStructure($node) {
-            var $input = $node.find(".tt-input");
-            _.each($input.data(attrsKey), function(val, key) {
-                _.isUndefined(val) ? $input.removeAttr(key) : $input.attr(key, val);
-            });
-            $input.detach().removeData(attrsKey).removeClass("tt-input").insertAfter($node);
-            $node.remove();
         }
     }();
     (function() {
@@ -1115,7 +1180,8 @@
                         withHint: _.isUndefined(o.hint) ? true : !!o.hint,
                         minLength: o.minLength,
                         autoselect: o.autoselect,
-                        datasets: datasets
+                        datasets: datasets,
+                        accessibleStatus: o.accessibleStatus
                     });
                     $input.data(typeaheadKey, typeahead);
                 }
